@@ -1,0 +1,4 @@
+conv_kernel_sizes: [3, 7, 15]
+conv_dilations: [1, 2, 4]
+attention_heads: 8
+attention_dropout: 0.0

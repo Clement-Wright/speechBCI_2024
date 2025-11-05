@@ -21,6 +21,8 @@ hydra:
 
 defaults:
   - wandb: defaults
+  - model: parallel_attention
+  - decoder: base
 
 outputDir: ${hydra:runtime.cwd}/outputs/dryad2025_demo
 

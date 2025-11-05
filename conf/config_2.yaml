@@ -17,6 +17,8 @@ hydra:
 
 defaults:
   - wandb: defaults
+  - model: parallel_attention
+  - decoder: base
           
 outputDir: /home/<user>/speech_BCI_torch/speech_logs/speechBaseline4
 datasetPath: /home/<user>/speech_BCI_torch/data/ptDecoder_ctc
