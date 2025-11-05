@@ -41,6 +41,18 @@ trainTransforms:
         - [110.0, 170.0]
       log_amplitude: True
       eps: 1.0e-5
+  - name: TimeWarp
+    params:
+      max_warp: 0.12
+      p: 0.35
+  - name: ChannelDropout
+    params:
+      dropout_rate: 0.18
+      p: 0.45
+  - name: AdditiveNoise
+    params:
+      std: 0.03
+      p: 0.3
 evalTransforms:
   - name: HighGammaPower
     params:
@@ -82,3 +94,22 @@ numWorkers: 0
 accelerator: cpu
 devices: 1
 precision: 32
+
+curriculum:
+  enabled: false
+  stages:
+    - name: warmup_short_vocab
+      overrides:
+        datasetOptions:
+          train:
+            max_time_bins: 80
+            max_phone_len: 35
+            vocabulary: [1, 2, 3, 4, 5, 6, 7, 8]
+        nSteps: 500
+    - name: extended_context
+      overrides:
+        datasetOptions:
+          train:
+            max_time_bins: 120
+            max_phone_len: 60
+        nSteps: 800

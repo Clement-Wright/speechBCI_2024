@@ -39,6 +39,19 @@ trainTransforms:
       log_power: True
       zscore: True
       eps: 1.0e-5
+  - name: TimeWarp
+    params:
+      max_warp: 0.15
+      p: 0.4
+  - name: ChannelDropout
+    params:
+      dropout_rate: 0.2
+      p: 0.5
+      fill_value: 0.0
+  - name: AdditiveNoise
+    params:
+      std: 0.05
+      p: 0.3
 
 # Reuse train transforms for evaluation by default
 # (can be overridden via hydra overrides)
@@ -76,3 +89,28 @@ numWorkers: 0
 accelerator: cpu
 devices: 1
 precision: 32
+
+curriculum:
+  enabled: false
+  stages:
+    - name: warmup_short_vocab
+      overrides:
+        seqLen: 30
+        datasetOptions:
+          train:
+            max_time_bins: 60
+            max_phone_len: 30
+            vocabulary: [1, 2, 3, 4, 5, 6]
+          eval:
+            max_time_bins: 80
+            max_phone_len: 40
+            vocabulary: [1, 2, 3, 4, 5, 6]
+        nSteps: 3
+    - name: extended_context
+      overrides:
+        seqLen: 50
+        datasetOptions:
+          train:
+            max_time_bins: 100
+            max_phone_len: 50
+        nSteps: 4
