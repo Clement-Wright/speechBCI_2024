@@ -80,3 +80,4 @@ We include a hyperparameter comparison chart for convenience.
 
 To obtain the final prediction, we performed ensembling of two models. More specifically, model 1 and model 2 each predicted a sentence given neural activity, and [Llama2 7b chat](https://huggingface.co/meta-llama/Llama-2-7b-chat-hf) (LLM optimized for dialogues) was used to pick the sentence that had higher score.  
 Please see `notebooks/LLM_ensemble.ipynb` for the code and example outputs.
+
