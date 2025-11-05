@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from neural_decoder import load_state_dict_compat
 from neural_decoder.model import GRUDecoder
-from neural_decoder.dataset import SpeechDataModule
+from neural_decoder.dataset import SpeechDataModule, load_dataset
 from neural_decoder.callbacks import (
     CurriculumStageLogger,
     LanguageModelFusionCallback,
@@ -158,9 +158,69 @@ def trainModel(args, stage_info: Optional[Dict[str, Any]] = None):
         with open(os.path.join(run_output_dir, "args"), "wb") as file:
             pickle.dump(args, file)
 
+    dataset_options_cfg = dict(args.get("datasetOptions", {}) or {})
+    loader_option_keys = {
+        "feature_dtype",
+        "split_overrides",
+        "train_split",
+        "eval_split",
+        "manifest_file",
+        "manifest",
+        "cache",
+        "cache_file",
+        "cache_overwrite",
+    }
+    loader_options_raw: Dict[str, Any] = {}
+    for key in list(dataset_options_cfg.keys()):
+        if key in loader_option_keys:
+            loader_options_raw[key] = dataset_options_cfg.pop(key)
+
+    cache_enabled = bool(loader_options_raw.pop("cache", True))
+    cache_filename = loader_options_raw.pop("cache_file", None)
+    cache_overwrite = bool(loader_options_raw.pop("cache_overwrite", False))
+
+    manifest_alias = loader_options_raw.pop("manifest", None)
+    if manifest_alias and "manifest_file" not in loader_options_raw:
+        loader_options_raw["manifest_file"] = manifest_alias
+
+    dataset_type = args.get("datasetType")
     dataset_path = to_absolute_path(args["datasetPath"])
-    with open(dataset_path, "rb") as handle:
-        loadedData = pickle.load(handle)
+    path_is_dir = os.path.isdir(dataset_path)
+
+    cache_path: Optional[str] = None
+    loadedData = None
+
+    use_loader = path_is_dir or (dataset_type and dataset_type.lower() != "pickle")
+
+    if use_loader:
+        if dataset_type is None:
+            raise ValueError(
+                "datasetType must be specified when datasetPath points to a directory"
+            )
+
+        if path_is_dir and cache_enabled:
+            cache_name = cache_filename or f"{dataset_type}_cache.pkl"
+            cache_path = os.path.join(dataset_path, cache_name)
+            if os.path.isfile(cache_path) and not cache_overwrite:
+                with open(cache_path, "rb") as handle:
+                    loadedData = pickle.load(handle)
+                if local_rank == 0:
+                    print(f"Loaded dataset cache from {cache_path}")
+
+        if loadedData is None:
+            loadedData = load_dataset(dataset_path, dataset_type, options=loader_options_raw)
+
+            if path_is_dir and cache_enabled:
+                cache_name = cache_filename or f"{dataset_type}_cache.pkl"
+                cache_path = os.path.join(dataset_path, cache_name)
+                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                with open(cache_path, "wb") as handle:
+                    pickle.dump(loadedData, handle)
+                if local_rank == 0:
+                    print(f"Cached dataset at {cache_path}")
+    else:
+        with open(dataset_path, "rb") as handle:
+            loadedData = pickle.load(handle)
 
     train_transform = build_augmentations(
         args.get("trainTransforms"), input_channels=args.get("nInputFeatures")
@@ -169,7 +229,7 @@ def trainModel(args, stage_info: Optional[Dict[str, Any]] = None):
         args.get("evalTransforms"), input_channels=args.get("nInputFeatures")
     )
 
-    dataset_options = args.get("datasetOptions", {})
+    dataset_options = dataset_options_cfg
     dm = SpeechDataModule(
         loadedData,
         args["batchSize"],
