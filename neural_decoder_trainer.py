@@ -1,3 +1,4 @@
+from neural_decoder import load_state_dict_compat
 from neural_decoder.model import GRUDecoder
 from neural_decoder.dataset import SpeechDataModule
 from neural_decoder.callbacks import TimerCallback
@@ -78,7 +79,11 @@ def trainModel(args):
         gamma=args["gamma"],
         stepSize=args["stepSize"],
         nBatch=args["nSteps"],
-        output_dir=args["outputDir"]
+        output_dir=args["outputDir"],
+        conv_kernel_sizes=list(args["model"]["conv_kernel_sizes"]),
+        conv_dilations=list(args["model"]["conv_dilations"]),
+        attention_heads=args["model"]["attention_heads"],
+        attention_dropout=args["model"].get("attention_dropout", 0.0),
     )
 
     # checkpoint callback
@@ -137,10 +142,14 @@ def loadModel(modelWeightPath, nInputLayers=24, device="cuda"):
         gamma=args["gamma"],
         stepSize=args["stepSize"],
         nBatch=args["nSteps"],
-        output_dir=args["output_dir"]
+        output_dir=args.get("output_dir", args.get("outputDir", "")),
+        conv_kernel_sizes=args.get("conv_kernel_sizes"),
+        conv_dilations=args.get("conv_dilations"),
+        attention_heads=args.get("attention_heads", 4),
+        attention_dropout=args.get("attention_dropout", 0.0),
     ).to(device)
 
-    model.load_state_dict(state_dict)
+    load_state_dict_compat(model, state_dict)
     return model
 
 

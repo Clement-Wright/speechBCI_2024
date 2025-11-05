@@ -4,6 +4,21 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from torch import nn, optim
+import torch.nn.functional as F
+
+
+class ChannelGate(nn.Module):
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        reduced_channels = max(1, channels // reduction)
+        self.fc1 = nn.Linear(channels, reduced_channels)
+        self.fc2 = nn.Linear(reduced_channels, channels)
+
+    def forward(self, x):
+        # x: (B, C, T)
+        squeeze = x.mean(dim=-1)
+        excitation = torch.sigmoid(self.fc2(F.relu(self.fc1(squeeze))))
+        return x * excitation.unsqueeze(-1)
 
 
 class GRUDecoder(pl.LightningModule):
@@ -30,8 +45,23 @@ class GRUDecoder(pl.LightningModule):
         stepSize,
         nBatch,
         output_dir,
+        conv_kernel_sizes=None,
+        conv_dilations=None,
+        attention_heads=4,
+        attention_dropout=0.0,
     ):
         super().__init__()
+
+        if conv_kernel_sizes is None:
+            conv_kernel_sizes = [3, 7, 15]
+        if conv_dilations is None:
+            conv_dilations = [1] * len(conv_kernel_sizes)
+        if len(conv_kernel_sizes) != len(conv_dilations):
+            raise ValueError(
+                "conv_kernel_sizes and conv_dilations must have the same length"
+            )
+        if attention_heads <= 0:
+            raise ValueError("attention_heads must be > 0")
 
         # Defining the number of layers and the nodes in each layer
         self.layer_dim = layer_dim
@@ -46,7 +76,10 @@ class GRUDecoder(pl.LightningModule):
         self.bidirectional = bidirectional
         self.inputLayerNonlinearity = torch.nn.Softsign()
         self.unfolder = torch.nn.Unfold(
-            (self.kernelLen, 1), dilation=1, padding=0, stride=self.strideLen
+            (self.kernelLen, 1),
+            dilation=1,
+            padding=0,
+            stride=(self.strideLen, 1),
         )
         self.gaussianSmoother = GaussianSmoothing(
             neural_dim, 20, self.gaussianSmoothWidth, dim=1
@@ -67,15 +100,81 @@ class GRUDecoder(pl.LightningModule):
         self.stepSize = stepSize
         self.nBatch = nBatch
         self.output_dir = output_dir
+        self.conv_kernel_sizes = list(conv_kernel_sizes)
+        self.conv_dilations = list(conv_dilations)
+        self.attention_heads = attention_heads
+        self.attention_dropout = attention_dropout
         self.testLoss = []
         self.testCER = []
+
+        self.save_hyperparameters(
+            {
+                "neural_dim": neural_dim,
+                "n_classes": n_classes,
+                "hidden_dim": hidden_dim,
+                "layer_dim": layer_dim,
+                "nDays": nDays,
+                "dropout": dropout,
+                "strideLen": strideLen,
+                "kernelLen": kernelLen,
+                "gaussianSmoothWidth": gaussianSmoothWidth,
+                "whiteNoiseSD": whiteNoiseSD,
+                "constantOffsetSD": constantOffsetSD,
+                "bidirectional": bidirectional,
+                "l2_decay": l2_decay,
+                "lrStart": lrStart,
+                "lrEnd": lrEnd,
+                "momentum": momentum,
+                "nesterov": nesterov,
+                "gamma": gamma,
+                "stepSize": stepSize,
+                "nSteps": nBatch,
+                "output_dir": output_dir,
+                "conv_kernel_sizes": conv_kernel_sizes,
+                "conv_dilations": conv_dilations,
+                "attention_heads": attention_heads,
+                "attention_dropout": attention_dropout,
+            }
+        )
+        self.branch_out_channels = neural_dim
+        self.conv_branches = nn.ModuleList()
+        self.branch_gates = nn.ModuleList()
+        for kernel_size, dilation in zip(
+            self.conv_kernel_sizes, self.conv_dilations
+        ):
+            padding = ((kernel_size - 1) // 2) * dilation
+            branch = nn.Conv1d(
+                neural_dim,
+                self.branch_out_channels,
+                kernel_size=kernel_size,
+                dilation=dilation,
+                padding=padding,
+                bias=False,
+            )
+            self.conv_branches.append(branch)
+            self.branch_gates.append(ChannelGate(self.branch_out_channels))
+
+        self.total_branch_channels = (
+            self.branch_out_channels * len(self.conv_branches)
+        )
+        if self.total_branch_channels % self.attention_heads != 0:
+            raise ValueError(
+                "total_branch_channels must be divisible by attention_heads"
+            )
+        self.attention = nn.MultiheadAttention(
+            embed_dim=self.total_branch_channels,
+            num_heads=self.attention_heads,
+            dropout=self.attention_dropout,
+            batch_first=False,
+        )
+        self.attention_norm = nn.LayerNorm(self.total_branch_channels)
 
         for x in range(nDays):
             self.dayWeights.data[x, :, :] = torch.eye(neural_dim)
 
         # GRU layers
         self.gru_decoder = nn.GRU(
-            (neural_dim) * self.kernelLen,
+            self.total_branch_channels * self.kernelLen,
             hidden_dim,
             layer_dim,
             batch_first=True,
@@ -122,11 +221,24 @@ class GRUDecoder(pl.LightningModule):
         ) + torch.index_select(self.dayBias, 0, dayIdx)
         transformedNeural = self.inputLayerNonlinearity(transformedNeural)
 
+        conv_input = torch.permute(transformedNeural, (0, 2, 1))
+        branch_features = []
+        for branch, gate in zip(self.conv_branches, self.branch_gates):
+            branch_out = branch(conv_input)
+            branch_out = F.relu(branch_out)
+            branch_out = gate(branch_out)
+            branch_features.append(branch_out)
+
+        multi_scale_features = torch.cat(branch_features, dim=1)
+        attn_in = torch.permute(multi_scale_features, (2, 0, 1))
+        attn_out, _ = self.attention(attn_in, attn_in, attn_in)
+        attn_out = torch.permute(attn_out, (1, 0, 2))
+        attn_out = self.attention_norm(attn_out)
+        attn_out = torch.permute(attn_out, (0, 2, 1))
+
         # stride/kernel
         stridedInputs = torch.permute(
-            self.unfolder(
-                torch.unsqueeze(torch.permute(transformedNeural, (0, 2, 1)), 3)
-            ),
+            self.unfolder(attn_out.unsqueeze(-1)),
             (0, 2, 1),
         )
 
