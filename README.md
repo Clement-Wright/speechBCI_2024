@@ -25,8 +25,9 @@ To run `eval_competition.py` and `notebooks/LLM_ensemble.ipynb`:
 1. Create and activate the conda environment:
    ```bash
    conda env create -f environment.yml
-   conda activate speechbci
+   conda activate speech-BCI
    ```
+   Feel free to rename the environment in `environment.yml` if you prefer a different alias.
 2. Install the Stanford `LanguageModelDecoder` runtime next to this repository (`third_party/speechBCI`) by following the upstream build guide, then add the runtime directory to your `PATH`.
 3. Authenticate with the Kaggle CLI (`pip install kaggle` is already listed in the environment file) and place your API token in `~/.kaggle/kaggle.json` with mode `600`.
 4. (Optional) Configure Weights & Biases credentials if you want experiment tracking with the new curriculum logger hooks.
@@ -38,7 +39,18 @@ To run `eval_competition.py` and `notebooks/LLM_ensemble.ipynb`:
 
 ### 2025 Dryad release
 - Download the Dryad archive from the [Brain-To-Text 2025 data DOI](https://datadryad.org/dataset/doi:10.5061/dryad.dncjsxm85).
-- Extract the recordings into `data/dryad2025/raw` and use the preprocessing helpers inside `neural_decoder/dataset.py` (see the `SpeechDataset` options for serialization) to create the pickled files consumed by the trainer.
+- Extract the recordings into `data/dryad2025/raw`. The bundle includes a manifest (`metadata/dryad2025_manifest.json`) listing the `.npy/.npz` shards for each session; keep that file alongside the raw folder or pass `--manifest` if you relocate it.
+- Materialise the Stanford-style pickle with the new loader:
+  ```bash
+  python -m neural_decoder.dataset \
+    --dataset-type dryad_2025 \
+    --dataset-path data/dryad2025 \
+    --output samples/datasets/dryad2025.pkl \
+    --train-split train \
+    --eval-split validation \
+    --feature-dtype float32
+  ```
+  The helper mirrors the original Stanford fields (`sentenceDat`, `phonemes`, `phoneLens`, `transcriptions`, etc.) and preserves optional keys such as `wordDat`/`wordLens` when present in the manifest entries.
 - Update `conf/config_drayd_2025.yaml` if you relocate the processed dataset.
 
 ### 2025 Kaggle competition split
@@ -47,8 +59,18 @@ To run `eval_competition.py` and `notebooks/LLM_ensemble.ipynb`:
   kaggle competitions download -c brain-to-text-25 -p data/kaggle2025/raw
   unzip data/kaggle2025/raw/brain-to-text-25.zip -d data/kaggle2025/raw
   ```
-- Use the helper loader (`neural_decoder/dataset.py`) to convert them into pickle files under `samples/datasets/kaggle2025`.
-- Mirror the competition splits by pointing `datasetOptions` in `conf/config_kaggle_2025.yaml` to the manifest files you download from Kaggle.
+- The Kaggle package ships `metadata/kaggle2025_manifest.json` that aligns each CSV feature shard with its phoneme/word annotations. Keep it next to `data/kaggle2025/raw` or point the loader to it manually.
+- Convert the shards into the training pickle:
+  ```bash
+  python -m neural_decoder.dataset \
+    --dataset-type kaggle_2025 \
+    --dataset-path data/kaggle2025 \
+    --output samples/datasets/kaggle2025.pkl \
+    --feature-dtype float32 \
+    --train-split train \
+    --eval-split validation
+  ```
+- Mirror the competition splits by updating `datasetOptions` in `conf/config_kaggle_2025.yaml` if you choose different manifest overrides.
 
 ## Training and evaluation quick start
 
