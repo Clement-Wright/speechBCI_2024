@@ -1,7 +1,7 @@
 from neural_decoder import load_state_dict_compat
 from neural_decoder.model import GRUDecoder
 from neural_decoder.dataset import SpeechDataModule
-from neural_decoder.callbacks import TimerCallback
+from neural_decoder.callbacks import LanguageModelFusionCallback, TimerCallback
 from datetime import datetime
 import hydra
 from hydra.core.hydra_config import HydraConfig
@@ -54,6 +54,17 @@ def trainModel(args):
     # data module
     dm = SpeechDataModule(loadedData, args["batchSize"], args["numWorkers"])
 
+    decoder_cfg = None
+    decoder_node = args.get("decoder", None)
+    if decoder_node is not None:
+        decoder_cfg = OmegaConf.to_container(decoder_node, resolve=True)
+
+    lm_decoder_config = None
+    fusion_cfg = None
+    if decoder_cfg:
+        lm_decoder_config = decoder_cfg.get("lm_decoder")
+        fusion_cfg = decoder_cfg.get("fusion")
+
     # tensorboard logger
     logger = TensorBoardLogger(args["outputDir"], name="torch_dist_v0")
 
@@ -84,6 +95,7 @@ def trainModel(args):
         conv_dilations=list(args["model"]["conv_dilations"]),
         attention_heads=args["model"]["attention_heads"],
         attention_dropout=args["model"].get("attention_dropout", 0.0),
+        lm_decoder_config=lm_decoder_config,
     )
 
     # checkpoint callback
@@ -91,6 +103,24 @@ def trainModel(args):
         filename=args["outputDir"] + "/modelWeights", monitor="val/ser",
         mode="min", save_top_k=1, every_n_train_steps=None)
     checkpointCallback.FILE_EXTENSION = ""
+
+    callbacks = [checkpointCallback, TimerCallback()]
+    if fusion_cfg and fusion_cfg.get("enabled", False):
+        beam_width = fusion_cfg.get("beam_search_width", fusion_cfg.get("beam_width", 10))
+        fusion_weight = fusion_cfg.get("fusion_weight", fusion_cfg.get("weight", 0.3))
+        temperature = fusion_cfg.get("temperature", 1.0)
+        length_penalty = fusion_cfg.get("length_penalty", 0.0)
+        fusion_callback = LanguageModelFusionCallback(
+            fusion_weight=fusion_weight,
+            beam_width=int(beam_width),
+            temperature=float(temperature),
+            length_penalty=float(length_penalty),
+            lm_model_name=fusion_cfg.get("lm_model"),
+            tokenizer_name=fusion_cfg.get("tokenizer"),
+            device=fusion_cfg.get("device", "auto"),
+            log_metric=fusion_cfg.get("log_metric", "val/lm_cer"),
+        )
+        callbacks.append(fusion_callback)
 
     # trainer
     trainer = pl.Trainer(
@@ -105,7 +135,7 @@ def trainModel(args):
         log_every_n_steps=1,
         val_check_interval=100,
         check_val_every_n_epoch=None,
-        callbacks=[checkpointCallback, TimerCallback()]
+        callbacks=callbacks,
     )
 
     # train
@@ -147,6 +177,7 @@ def loadModel(modelWeightPath, nInputLayers=24, device="cuda"):
         conv_dilations=args.get("conv_dilations"),
         attention_heads=args.get("attention_heads", 4),
         attention_dropout=args.get("attention_dropout", 0.0),
+        lm_decoder_config=args.get("lm_decoder_config"),
     ).to(device)
 
     load_state_dict_compat(model, state_dict)
