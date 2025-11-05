@@ -12,13 +12,70 @@ This competition is based on the data described in [Willett et al. (Nature, 2023
 We would like to thank the participant of the study and the organizers for making this precious data and the code public.
 
 # Requirements
-We used [PyTorch Lightning](https://lightning.ai/docs/pytorch/stable/) to test our models.  
+We used [PyTorch Lightning](https://lightning.ai/docs/pytorch/stable/) to test our models.
 `environment.yml` included in this repository can be used to recreate our conda enviromnent.
 
-To run `eval_competition.py` and `notebooks/LLM_ensemble.ipynb`: 
+To run `eval_competition.py` and `notebooks/LLM_ensemble.ipynb`:
 1. Pull [LanguageModelDecoder](https://github.com/fwillett/speechBCI/tree/main/LanguageModelDecoder) into the project directory.
-2. Pull [rnnEval.py](https://github.com/fwillett/speechBCI/blob/main/NeuralDecoder/neuralDecoder/utils/rnnEval.py) and [lmDecoderUtils.py](https://github.com/fwillett/speechBCI/blob/main/NeuralDecoder/neuralDecoder/utils/lmDecoderUtils.py) into `<path to project>/NeuralDecoder/neuralDecoder/utils/`. 
+2. Pull [rnnEval.py](https://github.com/fwillett/speechBCI/blob/main/NeuralDecoder/neuralDecoder/utils/rnnEval.py) and [lmDecoderUtils.py](https://github.com/fwillett/speechBCI/blob/main/NeuralDecoder/neuralDecoder/utils/lmDecoderUtils.py) into `<path to project>/NeuralDecoder/neuralDecoder/utils/`.
 3. Follow the [instructions](https://github.com/fwillett/speechBCI/tree/main/LanguageModelDecoder) to build and run the language model decoder.
+
+## Environment setup for 2025 workflows
+
+1. Create and activate the conda environment:
+   ```bash
+   conda env create -f environment.yml
+   conda activate speechbci
+   ```
+2. Install the Stanford `LanguageModelDecoder` runtime next to this repository (`third_party/speechBCI`) by following the upstream build guide, then add the runtime directory to your `PATH`.
+3. Authenticate with the Kaggle CLI (`pip install kaggle` is already listed in the environment file) and place your API token in `~/.kaggle/kaggle.json` with mode `600`.
+4. (Optional) Configure Weights & Biases credentials if you want experiment tracking with the new curriculum logger hooks.
+
+## Data acquisition
+
+### 2024 baseline assets
+- Run the original Stanford preprocessing pipeline to populate `samples/datasets/cibr2024` as described in the upstream `speechBCI` README. The `config_1.yaml` and `config_2.yaml` files remain compatible with these assets.
+
+### 2025 Dryad release
+- Download the Dryad archive from the [Brain-To-Text 2025 data DOI](https://datadryad.org/dataset/doi:10.5061/dryad.dncjsxm85).
+- Extract the recordings into `data/dryad2025/raw` and use the preprocessing helpers inside `neural_decoder/dataset.py` (see the `SpeechDataset` options for serialization) to create the pickled files consumed by the trainer.
+- Update `conf/config_drayd_2025.yaml` if you relocate the processed dataset.
+
+### 2025 Kaggle competition split
+- Join the Kaggle competition and download the public training shards:
+  ```bash
+  kaggle competitions download -c brain-to-text-25 -p data/kaggle2025/raw
+  unzip data/kaggle2025/raw/brain-to-text-25.zip -d data/kaggle2025/raw
+  ```
+- Use the helper loader (`neural_decoder/dataset.py`) to convert them into pickle files under `samples/datasets/kaggle2025`.
+- Mirror the competition splits by pointing `datasetOptions` in `conf/config_kaggle_2025.yaml` to the manifest files you download from Kaggle.
+
+## Training and evaluation quick start
+
+- **Baseline fine-tuning** on any config:
+  ```bash
+  python neural_decoder_trainer.py --config-name config_drayd_2025
+  ```
+- **Curriculum schedule** run with staged sequence length/vocabulary:
+  ```bash
+  ./scripts/run_curriculum.sh config_kaggle_2025
+  ```
+  Pass additional Hydra overrides after the config name, e.g. `./scripts/run_curriculum.sh config_kaggle_2025 curriculum.stages[0].overrides.seqLen=24`.
+- **Language-model fusion** training/evaluation toggle:
+  ```bash
+  ./scripts/run_lm_fusion.sh config_kaggle_2025 decoder.fusion.lm_model=meta-llama/Llama-2-7b-chat-hf
+  ```
+- **Competition evaluation** (baseline decoder vs. LM-augmented):
+  ```bash
+  python eval_competition.py --modelPath <checkpoint.pt> --dataPath <dataset_dir> \
+    --decoder-mode language_model --beam-width 20 --temperature 0.8 \
+    --fst-path <TLG.fst> --const-arpa-path <const.arpa> --words-path <words.txt>
+  ```
+- **Metrics comparison notebook**: run `notebooks/WER_CER_comparison.ipynb` to plot WER and character accuracy for baseline vs. enhanced runs.
+
+The training entry point now supports staged Hydra configs and logs curriculum transitions; see `scripts/` for common launch recipes.
+
+For a narrative overview of how these changes build on the 2024 solutions, consult `docs/lessons_learned.md`.
 
 # Model training
 To train the model, run `neural_decoder_train.py`. 
