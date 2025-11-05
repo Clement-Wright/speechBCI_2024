@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 from edit_distance import SequenceMatcher
@@ -55,6 +55,92 @@ class TimerCallback(Callback):
             prog_bar=False,
         )
         self.val_batch_time = 0
+
+
+class CurriculumStageLogger(Callback):
+    """Log transitions between curriculum stages."""
+
+    def __init__(
+        self,
+        stage_index: int,
+        stage_name: str,
+        total_stages: int,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__()
+        self.stage_index = stage_index
+        self.stage_name = stage_name
+        self.total_stages = total_stages
+        self.metadata = metadata or {}
+        self._logged = False
+
+    def setup(self, trainer, pl_module, stage: Optional[str] = None):
+        pl_module.curriculum_stage = {
+            "index": self.stage_index,
+            "name": self.stage_name,
+            "total": self.total_stages,
+            "metadata": self.metadata,
+        }
+
+    def on_train_start(self, trainer, pl_module):
+        self._log_stage(trainer, pl_module)
+
+    def on_validation_start(self, trainer, pl_module):
+        self._log_stage(trainer, pl_module)
+
+    def _log_stage(self, trainer, pl_module):
+        if self._logged:
+            return
+
+        LOGGER.info(
+            "Starting curriculum stage %s/%s: %s",
+            self.stage_index + 1,
+            self.total_stages,
+            self.stage_name,
+        )
+
+        metrics = {
+            "curriculum/stage_index": float(self.stage_index),
+            "curriculum/stage_number": float(self.stage_index + 1),
+            "curriculum/total_stages": float(max(self.total_stages, 1)),
+        }
+
+        if trainer.logger is not None:
+            try:
+                trainer.logger.log_metrics(metrics, step=trainer.global_step)
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.debug("Logger does not support stage metric logging.")
+
+            try:
+                trainer.logger.log_hyperparams(
+                    {
+                        "curriculum_stage_name": self.stage_name,
+                        "curriculum_stage_index": self.stage_index,
+                        "curriculum_total_stages": self.total_stages,
+                    }
+                )
+            except Exception:  # pragma: no cover - defensive
+                LOGGER.debug("Logger does not support hyperparameter logging for curriculum stage.")
+
+        try:
+            pl_module.log(
+                "curriculum/stage_index",
+                float(self.stage_index),
+                prog_bar=True,
+                sync_dist=True,
+                rank_zero_only=True,
+            )
+            pl_module.log(
+                "curriculum/total_stages",
+                float(max(self.total_stages, 1)),
+                prog_bar=False,
+                sync_dist=True,
+                rank_zero_only=True,
+            )
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.debug("Module logging not available for curriculum stage metrics.")
+
+        self._logged = True
 
 
 class LanguageModelFusionCallback(Callback):

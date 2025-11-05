@@ -60,3 +60,7 @@ numWorkers: 10
 accelerator: gpu
 devices: -1  # use all the available GPUs
 precision: 32
+
+curriculum:
+  enabled: false
+  stages: []
