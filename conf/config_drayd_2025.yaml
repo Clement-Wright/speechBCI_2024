@@ -1,0 +1,82 @@
+hydra:
+  run:
+    dir: ${outputDir}
+  sweep:
+    dir: ${outputDir}
+    subdir: ${hydra.job.override_dirname}
+  job:
+    config:
+      override_dirname:
+        exclude_keys:
+          - outputDir
+          - datasetPath
+          - datasetType
+          - datasetOptions
+          - trainTransforms
+          - evalTransforms
+          - wandb.enabled
+          - wandb.setup.project
+          - wandb.setup.entity
+          - wandb.setup.group
+
+defaults:
+  - wandb: defaults
+
+outputDir: ${hydra:runtime.cwd}/outputs/dryad2025_demo
+
+datasetPath: ${hydra:runtime.cwd}/samples/datasets/dryad2025
+datasetType: dryad_2025
+datasetOptions:
+  feature_dtype: float32
+  eval_split: validation
+
+trainTransforms:
+  - name: MultiBandHilbertEnvelope
+    params:
+      sample_rate: 1000.0
+      bands:
+        - [70.0, 110.0]
+        - [110.0, 170.0]
+      log_amplitude: True
+      eps: 1.0e-5
+evalTransforms:
+  - name: HighGammaPower
+    params:
+      sample_rate: 1000.0
+      band: [70.0, 170.0]
+      log_power: True
+      zscore: False
+      eps: 1.0e-5
+
+seqLen: 50
+
+seed: 0
+batchSize: 2
+lrStart: 0.01
+lrEnd: 0.01
+l2_decay: 1e-6
+nSteps: 4
+
+whiteNoiseSD: 0.2
+constantOffsetSD: 0.05
+gaussianSmoothWidth: 1.0
+
+nUnits: 64
+nLayers: 2
+nInputFeatures: 8
+nClasses: 40
+dropout: 0.1
+strideLen: 2
+kernelLen: 8
+bidirectional: True
+momentum: 0.9
+nesterov: False
+stepSize: 2
+gamma: 0.5
+
+numWorkers: 0
+
+# lightning
+accelerator: cpu
+devices: 1
+precision: 32

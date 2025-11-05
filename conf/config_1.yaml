@@ -20,6 +20,11 @@ defaults:
           
 outputDir: /home/<user>/speech_BCI_torch/speech_logs/speechBaseline4
 datasetPath: /home/<user>/speech_BCI_torch/data/ptDecoder_ctc
+datasetType: cibr_2024
+datasetOptions: {}
+
+trainTransforms: []
+evalTransforms: []
 
 seqLen: 150 
 
