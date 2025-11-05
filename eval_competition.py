@@ -1,21 +1,38 @@
 import argparse
-import numpy as np
+import csv
+import json
 import os
 import pickle
 import re
 import sys
 import time
-from typing import Dict, List
+import zipfile
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
-import torch
-from edit_distance import SequenceMatcher
+import numpy as np
+try:
+    from edit_distance import SequenceMatcher
+except ImportError:  # pragma: no cover - optional when only formatting submissions
+    SequenceMatcher = None
+
+try:
+    import torch
+except ImportError:  # pragma: no cover - allows helper import without torch
+    torch = None
+
+try:
+    from jiwer import wer
+except ImportError:  # pragma: no cover - optional dependency for metrics
+    wer = None
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(SCRIPT_DIR))
 
-from neural_decoder.dataset import SpeechDataset
-from neural_decoder_trainer import loadModel
-import NeuralDecoder.neuralDecoder.utils.lmDecoderUtils as lmDecoderUtils
+if TYPE_CHECKING:  # pragma: no cover - hints for type checkers only
+    from neural_decoder.dataset import SpeechDataset
+    from neural_decoder_trainer import loadModel
+    import NeuralDecoder.neuralDecoder.utils.lmDecoderUtils as lmDecoderUtils
 
 
 def _prepare_adapter(model, args) -> None:
@@ -51,6 +68,75 @@ def _prepare_adapter(model, args) -> None:
             "Language model backend is unavailable. Ensure the decoder runtime "
             "is built and the resource paths are correctly specified."
         )
+
+
+def _prepare_submission_records(
+    predictions: Sequence[str],
+    sample_ids: Optional[Iterable[int]] = None,
+) -> List[Dict[str, str]]:
+    if sample_ids is None:
+        sample_ids = range(len(predictions))
+    return [
+        {"id": int(sample_id), "text": prediction}
+        for sample_id, prediction in zip(sample_ids, predictions)
+    ]
+
+
+def save_submission(
+    predictions: Sequence[str],
+    output_dir: str,
+    submission_format: str = "csv",
+    filename: Optional[str] = None,
+    compress: bool = False,
+    sample_ids: Optional[Iterable[int]] = None,
+) -> Tuple[Path, Optional[Path]]:
+    """Write predictions to disk in the Kaggle submission format.
+
+    Args:
+        predictions: Ordered predictions as decoded strings.
+        output_dir: Directory where the submission file will be written.
+        submission_format: Either ``"csv"`` or ``"json"``.
+        filename: Optional custom filename. Extension is inferred from
+            ``submission_format`` if not provided.
+        compress: If ``True``, create a ``.zip`` archive with the submission file.
+        sample_ids: Optional iterable of integer identifiers. Defaults to
+            ``range(len(predictions))``.
+
+    Returns:
+        A tuple containing the path to the generated submission file and the path
+        to the optional zip archive (``None`` if ``compress`` is ``False``).
+    """
+
+    if submission_format not in {"csv", "json"}:
+        raise ValueError("submission_format must be 'csv' or 'json'")
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    inferred_name = f"submission.{submission_format}"
+    submission_name = filename or inferred_name
+    submission_path = out_dir / submission_name
+
+    records = _prepare_submission_records(predictions, sample_ids)
+
+    if submission_format == "csv":
+        with submission_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["id", "text"])
+            for record in records:
+                writer.writerow([record["id"], record["text"]])
+    else:
+        with submission_path.open("w", encoding="utf-8") as handle:
+            json.dump(records, handle, ensure_ascii=False, indent=2)
+
+    zip_path: Optional[Path] = None
+    if compress:
+        zip_name = submission_path.with_suffix(submission_path.suffix + ".zip")
+        zip_path = zip_name
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(submission_path, arcname=submission_path.name)
+
+    return submission_path, zip_path
 
 
 def main() -> None:
@@ -95,8 +181,34 @@ def main() -> None:
         default=None,
         help="Optional permutation applied to logits before decoding",
     )
+    parser.add_argument(
+        "--submission-format",
+        choices=["csv", "json"],
+        default="csv",
+        help="Submission file format required by the Kaggle competition",
+    )
+    parser.add_argument(
+        "--submission-name",
+        type=str,
+        default=None,
+        help="Optional custom name for the submission file",
+    )
+    parser.add_argument(
+        "--compress-submission",
+        action="store_true",
+        help="Create a ZIP archive alongside the raw submission file",
+    )
 
     args = parser.parse_args()
+
+    if torch is None:
+        raise ImportError(
+            "PyTorch is required to run eval_competition. Install torch before executing the evaluator."
+        )
+
+    from neural_decoder.dataset import SpeechDataset
+    from neural_decoder_trainer import loadModel
+    import NeuralDecoder.neuralDecoder.utils.lmDecoderUtils as lmDecoderUtils
 
     with open(args.dataPath, "rb") as handle:
         loadedData = pickle.load(handle)
@@ -228,24 +340,44 @@ def main() -> None:
             else:
                 decodedTranscriptions.append("")
 
-        # Compute a simple character error rate against the reference text
-        total_distance = 0.0
-        total_length = 0
-        for predicted, reference in zip(
-            decodedTranscriptions, rnn_outputs["transcriptions_raw"]
-        ):
-            matcher = SequenceMatcher(a=list(reference), b=list(predicted))
-            total_distance += matcher.distance()
-            total_length += len(reference)
+        if SequenceMatcher is None:
+            print("Install 'edit-distance' to compute CER metrics.")
+        else:
+            # Compute a simple character error rate against the reference text
+            total_distance = 0.0
+            total_length = 0
+            for predicted, reference in zip(
+                decodedTranscriptions, rnn_outputs["transcriptions_raw"]
+            ):
+                matcher = SequenceMatcher(a=list(reference), b=list(predicted))
+                total_distance += matcher.distance()
+                total_length += len(reference)
 
-        if total_length > 0:
-            cer = total_distance / total_length
-            print(f"WFST decoder char error rate: {cer:.4f}")
+            if total_length > 0:
+                cer = total_distance / total_length
+                print(f"WFST decoder char error rate: {cer:.4f}")
+
+        if wer is not None:
+            dataset_wer = wer(rnn_outputs["transcriptions_raw"], decodedTranscriptions)
+            print(f"WFST decoder word error rate: {dataset_wer:.4f}")
+        else:
+            print("Install 'jiwer' to compute WER metrics.")
 
         submission_name = "LanguageModelCompetitionSubmission.txt"
         with open(os.path.join(args.outputDir, submission_name), "w") as f:
             for transcription in decodedTranscriptions:
                 f.write(transcription + "\n")
+
+    submission_path, zip_path = save_submission(
+        decodedTranscriptions,
+        args.outputDir,
+        submission_format=args.submission_format,
+        filename=args.submission_name,
+        compress=args.compress_submission,
+    )
+    print(f"Saved Kaggle submission file to {submission_path}")
+    if zip_path is not None:
+        print(f"Saved compressed submission archive to {zip_path}")
 
 
 if __name__ == "__main__":

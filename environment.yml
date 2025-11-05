@@ -119,6 +119,8 @@ dependencies:
       - protobuf==4.25.3
       - pyparsing==3.1.2
       - pyperclip==1.8.2
+      - jiwer==3.0.4
+      - kaggle==1.6.17
       - pytorch-lightning==2.2.4
       - pyyaml==6.0.1
       - regex==2024.5.15
