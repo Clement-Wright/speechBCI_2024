@@ -18,6 +18,15 @@ def load_state_dict_compat(
     usable.  Missing and unexpected keys are logged to help with debugging.
     """
 
+    if any(key.startswith("fc_decoder_out") for key in state_dict.keys()):
+        state_dict = state_dict.__class__(state_dict)  # preserve OrderedDict
+        for key in list(state_dict.keys()):
+            if key.startswith("fc_decoder_out"):
+                new_key = key.replace(
+                    "fc_decoder_out", "decoder_adapter.projection", 1
+                )
+                state_dict[new_key] = state_dict.pop(key)
+
     try:
         result = model.load_state_dict(state_dict, strict=strict)
     except RuntimeError:

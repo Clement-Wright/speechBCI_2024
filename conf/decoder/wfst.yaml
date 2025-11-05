@@ -1,0 +1,32 @@
+# Example configuration enabling the speechBCI WFST decoder and shallow fusion.
+lm_decoder:
+  enabled: true
+  runtime_root: ${hydra:runtime.cwd}/third_party/speechBCI/runtime/server/x86
+  auto_download: false
+  resource:
+    fst_path: ${oc.env:LM_FST_PATH,""}
+    const_arpa_path: ${oc.env:LM_CONST_ARPA_PATH,""}
+    g_path: ${oc.env:LM_G_PATH,""}
+    words_path: ${oc.env:LM_WORDS_PATH,""}
+    symbol_table: ${oc.env:LM_SYMBOL_TABLE,""}
+  decode_options:
+    max_active: 9000
+    min_active: 100
+    beam: 20.0
+    lattice_beam: 10.0
+    acoustic_scale: 0.8
+    ctc_blank_skip_threshold: 0.98
+    nbest: 25
+  logit_mapping: null
+
+fusion:
+  enabled: true
+  beam_width: 25
+  beam_search_width: 25
+  fusion_weight: 0.6
+  temperature: 0.9
+  length_penalty: 0.1
+  lm_model: gpt2
+  tokenizer: gpt2
+  device: auto
+  log_metric: val/lm_cer
